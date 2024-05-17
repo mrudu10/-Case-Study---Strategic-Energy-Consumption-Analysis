@@ -1,0 +1,575 @@
+---
+title: "IDS project: Energy conservation analysis and Estimation"
+author: "Group 5"
+date: "`r Sys.Date()`"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE)
+
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r}
+
+library(sfarrow)
+# helps read Parquet files
+library(sf)
+# helps with spatial data
+library(arrow)
+# URL for the static house info Parquet file
+static_house_info_url <- "https://intro-datascience.s3.us-east-2.amazonaws.com/SC-data/static_house_info.parquet"
+
+# Read the static house info data using the arrow package
+static_house_info <- arrow::read_parquet(static_house_info_url)
+
+# Columns to remove
+columns_to_remove <- c(
+  # List of columns to be removed from the dataset
+  "in.cec_climate_zone",
+  "in.dehumidifier",
+  "in.electric_vehicle",
+  "in.emissions_electricity_folders",
+  "in.emissions_electricity_values_or_filepaths",
+  "in.geometry_building_horizontal_location_mf",
+  "in.geometry_building_horizontal_location_sfa",
+  "in.geometry_building_level_mf",
+  "in.geometry_building_number_units_mf",
+  "in.geometry_building_number_units_sfa",
+  "in.geometry_building_type_acs",
+  "in.geometry_building_type_height",
+  "in.geometry_building_type_recs",
+  "in.hot_water_distribution",
+  "in.holiday_lighting",
+  "in.hot_water_distribution",
+  "in.hvac_has_shared_system",
+  "in.hvac_secondary_heating_efficiency",
+  "in.hvac_secondary_heating_type_and_fuel",
+  "in.hvac_shared_efficiencies",
+  "in.hvac_system_single_speed_ac_airflow",
+  "in.hvac_system_single_speed_ac_charge",
+  "in.hvac_system_single_speed_ashp_airflow",
+  "in.hvac_system_single_speed_ashp_charge",
+  "in.iso_rto_region",
+  "in.mechanical_ventilation",
+  "in.overhangs",
+  "in.simulation_control_run_period_begin_day_of_month",
+  "in.simulation_control_run_period_begin_month",
+  "in.solar_hot_water",
+  "in.units_represented",
+  "in.emissions_electricity_folders",
+  "in.emissions_electricity_values_or_filepaths",
+  "in.emissions_electricity_units",
+  "in.emissions_scenario_names",
+  "in.geometry_story_bin",
+  "in.emissions_electricity_values_or_filepaths",
+  "in.electric_vehicle",
+  "in.puma_metro_status",
+  "in.income_recs_2015",
+  "in.income_recs_2020",
+  "in.radiant_barrier",
+  "in.misc_well_pump"
+  
+)
+```
+```{r}
+# Assume df is your data frame
+column_names <- colnames(static_house_info)
+print(column_names)
+
+```
+```{r}
+# Assuming static_house_info is your data frame
+all_columns <- colnames(static_house_info)
+
+# List of columns to exclude
+excluded_columns <- c('in.weather_file_city','bldg_id', 'in.sqft', 'in.county','in.heating_fuel','in.income','in.insulation_ceiling','in.lighting','in.usage_level', 'in.weather_file_longitude','in.weather_file_latitude','in.bathroom_spot_vent_hour','in.building_america_climate_zone','in.ceiling_fan','in.clothes_dryer','in.clothes_washer','in.clothes_washer_presence','in.cooking_range', 'in.cooling_setpoint','in.cooling_setpoint_has_offset','in.cooling_setpoint_offset_magnitude', 'in.cooling_setpoint_offset_period','in.corridor')
+
+# Filter out the excluded columns
+filtered_columns <- all_columns[!all_columns %in% excluded_columns]
+
+# Print the remaining columns
+print(filtered_columns)
+
+```
+
+
+#remove these columns from dataset
+```{r}
+
+static_house_info <- static_house_info[, -which(names(static_house_info) %in% columns_to_remove)]
+str(static_house_info)
+```
+
+
+
+
+```{r eval=FALSE}
+# Function to obtain energy related data using building id
+library(purrr)
+
+obtain_energy <- function(bldg_id) {
+  
+  bldg_url <- paste0("https://intro-datascience.s3.us-east-2.amazonaws.com/SC-data/2023-houseData/",bldg_id,".parquet")
+  
+  df <- arrow::read_parquet(bldg_url)
+    
+  #Choosing the data of energy consumption in month of July
+  df <-  df %>% filter(month(time) == 7) 
+  
+  # Checking the numeric variables for negative values and converting them to positive values
+  numerical_cols <- sapply(df, is.numeric)
+  df[, numerical_cols] <- lapply(df[, numerical_cols], function(x) ifelse(x < 0, abs(x), x))
+
+  # Obtaining total energy consumption for hour
+  df$total_energy_hour <- rowSums(df[,-which(names(df) == 'time')])
+  
+  df <- df[, c('time', 'total_energy_hour')]
+  
+  df$time <- as.POSIXct(df$time, tz= 'EST', origin = '1970-01-01')
+  
+  # Aggregating by day, obtaining daily total energy consumption for month of july
+  daily_df <- df %>%
+              mutate(date = as.Date(time)) %>% 
+              mutate(bldg_id = bldg_id) %>% 
+              group_by(bldg_id, date) %>%
+              summarize(total_energy = sum(total_energy_hour, na.rm = TRUE), .groups = 'drop')
+  
+  return(daily_df)
+}
+
+# Calling obtain_energy function for all building ids
+total_energy_df <- purrr::map_dfr(bldg_id, obtain_energy)
+
+```
+
+```{r}
+#head(total_energy_df)
+```
+
+```{r}
+#write.csv(total_energy_df, 'C:/Users/HP/Desktop/INTRO TO DS/Final/total_energy_df.csv')
+
+total_energy_consumed <- read.csv('C:/Users/HP/Desktop/INTRO TO DS/Final/total_energy_df.csv')
+```
+
+```{r}
+total_energy_consumed<- read.csv('C:/Users/HP/Desktop/INTRO TO DS/Final/total_energy_df.csv')
+
+```
+```{r}
+
+total_energy_consumed<-total_energy_consumed[, -which(names(total_energy_consumed) %in% 'date')]
+result<-total_energy_consumed[, -which(names(total_energy_consumed) %in% 'X')]
+
+
+
+
+
+```
+
+```{r}
+library(tidyverse)
+```
+
+```{r}
+#total energy consumed
+result <- result %>%
+  group_by(bldg_id) %>%
+  summarise(total_energy=sum(total_energy))
+
+```
+
+
+
+```{r}
+
+Energy_consumed<- result
+
+```
+
+
+```{r}
+house_data<-static_house_info
+```
+
+```{r}
+library(sfarrow)
+# helps read Parquet files
+library(sf)
+# helps with spatial data
+library(arrow)
+library(readr)
+library(dplyr)
+library(lubridate)
+# helps in working with dates and times
+
+weather_data <- read_csv("https://intro-datascience.s3.us-east-2.amazonaws.com/SC-data/weather/2023-weather-data/G4500010.csv")
+
+
+# Read house data
+bldg_id <- house_data$bldg_id
+
+
+# Function to fetch weather data for a specific county
+fetch_county_weather <- function(in.county) {
+  # Construct URL for weather data of the county
+  weather_url <- paste0("https://intro-datascience.s3.us-east-2.amazonaws.com/SC-data/weather/2023-weather-data/", in.county, ".csv")
+  
+  # Read weather data
+  weather_df <- read_csv(weather_url)
+  
+  # Convert date column to Date type
+  weather_df$date <- as.Date(weather_df$date_time)
+  
+  # Filter weather data for July
+  july_weather <- weather_df %>%
+    filter(month(date) == 7)
+  
+  #adds a new column to the weather data called in.county, which tells us which county the weather data is for
+  july_weather$in.county <- in.county
+ 
+  
+  return(july_weather)
+}
+
+# Loop over unique county IDs in houses_df and fetch weather data for each county
+all_county_weather <- lapply(unique(house_data$in.county), fetch_county_weather)
+
+# Combine weather data for all counties into a single dataframe
+all_county_weather_df <- do.call(rbind, all_county_weather)
+
+
+
+
+
+
+all_county_weather_df <- all_county_weather_df %>%group_by(in.county, ) %>%summarise(across(where(is.numeric), sum, na.rm = TRUE))
+```
+
+
+
+
+```{r}
+
+#write.csv(all_county_weather_df, 'C:/Users/HP/Desktop/INTRO TO DS/Final/all_county_weather_dataset.csv')
+
+```
+
+
+```{r}
+all_county_weather_dataset<-read.csv('C:/Users/HP/Desktop/INTRO TO DS/Final/all_county_weather_dataset.csv')
+```
+
+#understanding counties with peak temperature
+```{r}
+library(ggplot2)
+
+# Assuming your dataframe is named 'data' and contains a column named 'Dry.Bulb.Temperature...C.'
+# and 'in.county' for the county identifier
+temperature_plot <- ggplot(all_county_weather_dataset, aes(x = in.county, y = all_county_weather_dataset$Dry.Bulb.Temperature...C., fill = in.county)) +
+  geom_bar(stat = "identity") +
+  labs(
+    title = "High Temperature prone by County",
+    x = "County",
+    y = "Dry Bulb Temperature (°C)"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  guides(fill = guide_legend(title = "County"))
+
+# Print the plot
+print(temperature_plot)
+
+```
+
+
+
+
+#MERGE static_house_info with total energy based on buidling ID
+```{r}
+
+building_energy_data <- merge(static_house_info, Energy_consumed, by = "bldg_id")
+#write.csv('C:/Users/HP/Desktop/INTRO TO DS/Final/building_energy_data.csv')
+
+
+```
+
+
+
+
+```{r}
+
+# Drop rows with missing values (NA)
+building_energy_data <- na.omit(building_energy_data)
+# Display the dimensions (number of rows and columns) of merge_static_house_info_df
+dim(building_energy_data)
+```
+
+
+```{r}
+
+# For the columns that have ranges, we are generally taking mean for them.
+obtain_mean <- function(values) {
+  if (grepl(">", values)) {
+    greater_than_value <- as.numeric(gsub(">", "", values))
+    return(greater_than_value + 1)
+  }
+  
+  if (grepl("<", values)) {
+    less_than_value <- as.numeric(gsub("<", "", values))
+    return(less_than_value - 1)
+  }
+
+  split <- strsplit(values, "-")[[1]]
+  
+  split <- as.numeric(gsub("\\+", "", split))  
+  
+  if (length(split) == 2) {
+    return(mean(split))
+  } else {
+    return(split[1])
+  }
+}
+
+building_energy_data$in.income <- sapply(building_energy_data$in.income, obtain_mean)
+
+
+```
+
+
+```{r}
+# Display the dimensions (number of rows and columns) of merge_static_house_info_df
+dim(building_energy_data)
+```
+```{r}
+in_geometry_floor_area_mapping <- c("0-499"=1 ,"500-749"=2,"750-999"=3,"1000-1499"=4,"1500-1999"=5,"2000-2499"=6,"2500-2999"=7,"3000-3999"=8,"4000+"=9)         
+in_hot_water_fixtures_mapping <- c("100% Usage"=1, "50% Usage"=0, "200% Usage"=2)
+upgrade_cooking_range_mapping <- c("Electric, Induction, 100% Usage"=1, "Electric, Induction, 80% Usage"=0,  "Electric, Induction, 120% Usage"=3)
+in_occupants_mapping <- c("1"=1  , "2"=2,"3"=3,"4"=4,"5"=5,"8"=8,"6"=6,"7"=7,"10+"=10,"9"=9)
+in_vacancy_status_mapping <- c("Occupied"=1, "Vacant"=0 )
+income_mapping <- c("<10000"=1, "10000-14999"=2, "15000-19999"=3, "20000-24999"=4, "25000-29999"=5, "30000-34999"=6, "35000-39999"=7, "40000-44999"=8, "45000-49999"=9, "50000-59999"=10, "60000-69999"=11, "70000-79999"=12, "80000-99999"=13, "100000-119999"=14, "120000-139999"=15, "140000-159999"=16, "160000-179999"=17, "180000-199999"=18, "200000+"=19)
+
+```
+
+
+
+#convert all necessary columns to numerical form
+```{r}
+building_energy_data$in.geometry_floor_area <- as.numeric(in_geometry_floor_area_mapping[building_energy_data$in.geometry_floor_area])
+
+
+building_energy_data$in.hot_water_fixtures <- as.numeric(in_hot_water_fixtures_mapping[building_energy_data$in.hot_water_fixtures])
+
+
+building_energy_data$upgrade.cooking_range <- as.numeric(upgrade_cooking_range_mapping[building_energy_data$upgrade.cooking_range])
+
+
+
+```
+
+
+```{r}
+building_energy_data_to_merge<-building_energy_data
+
+```
+
+
+#merge county colum with energy consumed datafram based on county ID
+
+```{r}
+final_merged_data <- merge(building_energy_data_to_merge,all_county_weather_dataset , by = "in.county")
+
+
+```
+
+
+```{r}
+
+#write.csv(final_merged_data, 'C:/Users/HP/Desktop/INTRO TO DS/Final/final_merged_data.csv')
+```
+
+```{r}
+final_data<- read.csv('C:/Users/HP/Desktop/INTRO TO DS/Final/final_merged_data.csv')
+```
+
+```{r}
+
+# Removing Hour from in.bathroom_spot_vent_hour column
+final_data$in.bathroom_spot_vent_hour <- as.numeric(sub("Hour", "", final_data$in.bathroom_spot_vent_hour))
+
+# Removing Hour from in.range_spot_vent_hour column
+final_data$in.range_spot_vent_hour <- as.numeric(sub("Hour", "", final_data$in.range_spot_vent_hour))
+```
+
+#Model Building
+```{r}
+final_data_2<- final_data
+# Remove unnecessary columns for modeling
+to_remove_cols<-c('bldg_id','in.county','X.1','in.neighbors','in.emissions_fossil_fuel_units','in.door_area','in_geometry_floor_area_mapping', 'in_hot_water_fixtures_mapping', 'upgrade_cooking_range_mapping', 'in_occupants_mapping', 'in_vacancy_status_mapping', 'in_vacancy_status_mapping', 'income_mapping' )
+
+```
+
+
+```{r}
+
+final_data_2 <- final_data_2[, -which(names(final_data_2) %in% to_remove_cols)]
+str(final_data_2)
+
+```
+
+
+#build regression model
+```{r}
+final_data_3<-final_data_2
+```
+
+```{r}
+# Assuming final_data_2 is your data frame and filtered_columns are the columns to remove
+
+# Check which of the filtered columns actually exist in final_data_2
+columns_to_remove <- filtered_columns[filtered_columns %in% colnames(final_data_3)]
+
+# Remove these columns from final_data_2
+final_data_3 <- final_data_3[, !colnames(final_data_3) %in% columns_to_remove]
+
+# Optionally, print the updated data frame to confirm the changes
+
+```
+
+```{r}
+str(final_data_3)
+```
+
+
+```{r}
+library(caret)
+library(xgboost)
+```
+
+
+
+
+#MODEL BUILDING: identifying columns with less than 2 factors by converting dataset into factor level catagories
+```{r}
+final_data_4<-final_data_2
+final_data_4_column_names <- colnames(final_data_4)
+final_data_4_column_names
+
+# Assuming factor_columns has been defined as:
+factor_columns <- sapply(final_data_4, is.factor)
+
+# Loop through the dataframe and convert columns to factor
+for (col in names(final_data_4)[!factor_columns & !sapply(final_data_4, is.numeric)]) {
+  final_data_4[[col]] <- as.factor(final_data_4[[col]])
+}
+
+
+factor_columns <- sapply(final_data_4, is.factor)
+
+# Check levels in each factor column
+levels_count <- sapply(final_data_4[factor_columns], function(x) length(levels(x)))
+
+# Identify columns with fewer than two levels
+problematic_columns <- names(levels_count[levels_count < 2])
+
+problematic_columns
+
+final_data_6 <- final_data_4[, -which(names(final_data_4) %in% problematic_columns)]
+str(final_data_6)
+
+
+```
+
+```{r}
+trainIndexSet2 <- createDataPartition(final_data_6$total_energy , p = 0.8, list = FALSE)
+
+train_data_set2 <- final_data_6[trainIndexSet2, ]
+test_data_set2 <- final_data_6[-trainIndexSet2, ]
+
+
+
+
+
+```
+
+#Decision Tree Model
+```{r}
+library(rpart)
+
+
+
+# Building the Decision Tree model
+dt_model <- rpart(total_energy ~ ., data = train_data_set2, method = "anova",
+                  control = rpart.control(maxdepth = 8))
+
+
+# Predicting with the Decision Tree model
+predictions_dt <- predict(dt_model, newdata = test_data_set2, type = "vector")
+
+# Calculate R-squared for Decision Tree
+actual_values_dt <- test_data_set2$total_energy
+rsquared_dt <- 1 - (sum((actual_values_dt - predictions_dt)^2) / sum((actual_values_dt - mean(actual_values_dt))^2))
+
+# Print the R-squared and accuracy
+cat("R-squared for Decision Tree:", rsquared_dt, "\n")
+cat("Accuracy of Decision Tree model is:", rsquared_dt * 100, "%\n")
+
+```
+
+
+
+
+
+#XGBOOST
+
+```{r}
+#CONCLUSION:library(xgboost)
+library(dplyr)
+
+# Building the model
+model_xgb <- xgboost(
+  data = as.matrix(train_data_set2[, -which(names(train_data_set2) == "total_energy")] %>% select_if(is.numeric)), 
+  label = train_data_set2$total_energy,
+  objective = "reg:squarederror",  # Use squared error for regression
+  nrounds = 100  # Adjust the number of boosting rounds
+)
+
+# Make predictions on the test set
+predictions <- predict(model_xgb, as.matrix(test_data_set2[, -which(names(test_data_set2) == "total_energy")] %>% select_if(is.numeric)))
+
+# Obtain the R-Squared error.
+rsquared <- 1 - (sum((predictions - test_data_set2$total_energy)^2) / sum((mean(test_data_set2$total_energy) - test_data_set2$total_energy)^2))
+cat("R-squared:", rsquared, "\n")
+cat("Accuracy of XG BOOST model is : ", rsquared * 100, "\n")
+```
+
+
+#LINEAR MODEL
+
+```{r}
+# Splitting 80% of data into training set, and 20% into testing set.
+lmoutSet2<- lm(total_energy ~ ., data = train_data_set2)
+summary(lmoutSet2)
+```
+
+
+```{r}
+new_merge_static_house_info_df4<- final_data_6
+new_merge_static_house_info_df4$Dry.Bulb.Temperature...C.<- final_data_6$Dry.Bulb.Temperature...C.+5
+lmoutNew <- predict(dt_model, newdata = new_merge_static_house_info_df4)
+
+
+summary(lmoutNew)
+
+```
+
